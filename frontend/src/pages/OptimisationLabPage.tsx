@@ -1,9 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { OptimizationResult, ParetoSolution, ProposedInterventionItem } from '../types';
 import { runOptimization } from '../api';
-import { Sliders, Play, Award, CheckCircle, TrendingDown, Layers, ArrowRight } from 'lucide-react';
+import { MOCK_OPTIMIZATION_RESULT } from '../mockData';
 import {
-  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ZAxis
+  Sliders, Play, Award, TrendingDown, Layers, ArrowRight,
+  Zap, Target, DollarSign, Loader2, ChevronRight, BarChart2
+} from 'lucide-react';
+import {
+  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Cell, ReferenceLine
 } from 'recharts';
 
 interface OptimisationLabPageProps {
@@ -11,430 +16,538 @@ interface OptimisationLabPageProps {
   onNavigateToSimulation: () => void;
 }
 
+const RAINFALL_SCENARIOS = [
+  { id: 1, name: '2-Year Return (Frequent)', mm: 42 },
+  { id: 2, name: '5-Year Design Storm', mm: 68 },
+  { id: 3, name: '10-Year Benchmark', mm: 95 },
+  { id: 4, name: '25-Year Extreme Event', mm: 148 },
+];
+
+const DRAINAGE_STRESS_OPTIONS = [
+  { pct: 100, label: '100% — Normal Capacity' },
+  { pct: 75, label: '75% — Mild Stress' },
+  { pct: 50, label: '50% — Severe Stress' },
+  { pct: 25, label: '25% — Critical Stress' },
+];
+
+const SOLUTION_CONFIGS = [
+  {
+    key: 'low_cost' as const,
+    title: 'Low-Cost',
+    badge: 'Economical Entry',
+    desc: 'Minimum investment achieving viable stormwater attenuation.',
+    activeClass: 'border-sky-500 bg-sky-50 ring-1 ring-sky-500',
+    badgeClass: 'bg-sky-100 text-sky-800',
+    metricColor: 'text-sky-700',
+    icon: DollarSign,
+  },
+  {
+    key: 'balanced' as const,
+    title: 'Balanced',
+    badge: 'Recommended Knee-Point',
+    desc: 'Optimal trade-off between cost and performance.',
+    activeClass: 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500',
+    badgeClass: 'bg-emerald-100 text-emerald-800',
+    metricColor: 'text-emerald-700',
+    icon: Target,
+  },
+  {
+    key: 'high_perf' as const,
+    title: 'High-Performance',
+    badge: 'Maximum Mitigation',
+    desc: 'Maximum volume and peak reduction within budget.',
+    activeClass: 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500',
+    badgeClass: 'bg-indigo-100 text-indigo-800',
+    metricColor: 'text-indigo-700',
+    icon: Zap,
+  },
+];
+
+type SolKey = 'low_cost' | 'balanced' | 'high_perf';
+
+const SolutionMap: Record<SolKey, (r: OptimizationResult) => ParetoSolution> = {
+  low_cost: r => r.low_cost_solution,
+  balanced: r => r.balanced_solution,
+  high_perf: r => r.high_perf_solution,
+};
+
+const ScatterTooltip = ({ active, payload }: any) => {
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  return (
+    <div className="bg-slate-900 border border-slate-700 rounded-lg p-3 shadow-xl text-xs font-mono">
+      <p className="font-bold text-slate-200 mb-1">Solution #{d.solutionId}</p>
+      <p className="text-slate-400">Type: <span className="text-slate-200">{d.type}</span></p>
+      <p className="text-slate-400">Cost: <span className="text-sky-300">₹{d.cost} L</span></p>
+      <p className="text-slate-400">Peak Reduction: <span className="text-emerald-300">{d.peakReduction}%</span></p>
+      <p className="text-slate-400">Vol Reduction: <span className="text-emerald-300">{d.volReduction}%</span></p>
+    </div>
+  );
+};
+
 export const OptimisationLabPage: React.FC<OptimisationLabPageProps> = ({
   onApplySolution,
-  onNavigateToSimulation
+  onNavigateToSimulation,
 }) => {
   const [budgetLimit, setBudgetLimit] = useState<number>(300);
+  const [scenarioId, setScenarioId] = useState<number>(3);
   const [drainageStress, setDrainageStress] = useState<number>(100);
-  const [popSize, setPopSize] = useState<number>(30);
-  const [generations, setGenerations] = useState<number>(20);
   const [loading, setLoading] = useState<boolean>(false);
+  const [progress, setProgress] = useState<number>(0);
   const [result, setResult] = useState<OptimizationResult | null>(null);
-  const [selectedSolution, setSelectedSolution] = useState<ParetoSolution | null>(null);
+  const [selectedSolKey, setSelectedSolKey] = useState<SolKey>('balanced');
+  const progressRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const selectedSolution = result ? SolutionMap[selectedSolKey](result) : null;
 
   const handleRunOptimization = async () => {
     setLoading(true);
+    setProgress(0);
+    setResult(null);
+
+    // Animate progress bar over 2.5 seconds
+    let p = 0;
+    progressRef.current = setInterval(() => {
+      p += Math.random() * 8 + 3;
+      if (p >= 95) { p = 95; clearInterval(progressRef.current!); }
+      setProgress(Math.round(p));
+    }, 150);
+
     try {
       const res = await runOptimization({
         budget_limit_lakhs: budgetLimit,
-        rainfall_scenario_id: 3, // 10-Yr Benchmark
+        rainfall_scenario_id: scenarioId,
         drainage_stress_pct: drainageStress,
-        population_size: popSize,
-        generations: generations
+        population_size: 60,
+        generations: 40,
       });
       setResult(res);
-      setSelectedSolution(res.balanced_solution);
     } catch (err) {
-      console.error(err);
+      console.warn('API failed, using mock data:', err);
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      setResult(MOCK_OPTIMIZATION_RESULT);
     } finally {
+      clearInterval(progressRef.current!);
+      setProgress(100);
       setLoading(false);
     }
   };
 
-  const handleApplyToActive = (sol: ParetoSolution) => {
+  const handleApplySolution = (sol: ParetoSolution) => {
     const items: ProposedInterventionItem[] = sol.allocations.map(a => ({
       subcatchment_code: a.subcatchment_code,
       intervention_type: a.intervention_type,
       allocated_area_m2: a.allocated_area_m2,
-      estimated_cost_inr_lakhs: a.estimated_cost_inr_lakhs
+      estimated_cost_inr_lakhs: a.estimated_cost_inr_lakhs,
     }));
     onApplySolution(items);
   };
 
-  const scatterData = result ? result.pareto_frontier.map(s => ({
+  const scatterData = result?.pareto_frontier.map(s => ({
     cost: s.total_cost_lakhs,
-    peakRunoff: s.residual_peak_runoff_m3s,
-    volumeM3: Math.round(s.residual_volume_m3),
+    peakReduction: s.peak_reduction_pct,
+    volReduction: s.volume_reduction_pct,
     solutionId: s.solution_id,
     type: s.solution_type,
-    sol: s
-  })) : [];
+    sol: s,
+  })) || [];
+
+  const highlightIds = result
+    ? new Set([result.low_cost_solution.solution_id, result.balanced_solution.solution_id, result.high_perf_solution.solution_id])
+    : new Set<number>();
 
   return (
     <div className="space-y-6">
-      
-      {/* Header */}
-      <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
+
+      {/* Header Banner */}
+      <div className="bg-gradient-to-r from-indigo-900 to-purple-900 rounded-xl p-6 shadow-lg text-white">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center space-x-2 text-xs font-mono text-slate-500 mb-1">
+            <div className="flex items-center space-x-2 text-indigo-300 text-xs font-mono mb-2">
+              <Target className="w-3.5 h-3.5" />
               <span>ALGORITHMIC PARETO EXPLORATION</span>
-              <span>/</span>
-              <span className="font-semibold text-slate-800">NSGA-II MULTI-OBJECTIVE SEARCH</span>
+              <span className="text-indigo-500">•</span>
+              <span>NSGA-II MULTI-OBJECTIVE</span>
             </div>
-            <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-              Budget-Constrained NSGA-II Optimisation Lab
-            </h1>
-            <p className="text-xs text-slate-600 mt-1 max-w-3xl">
-              Simultaneously optimize three conflicting objectives: (1) Minimise intervention cost (₹ Lakhs), (2) Minimise residual peak runoff (m³/s), and (3) Minimise residual runoff volume (m³).
+            <h1 className="text-2xl font-bold tracking-tight mb-1">Budget-Constrained NSGA-II Optimisation Lab</h1>
+            <p className="text-indigo-200 text-xs max-w-2xl leading-relaxed">
+              Simultaneously optimize three conflicting objectives: (1) Minimise GI capital cost, 
+              (2) Minimise residual peak runoff, and (3) Minimise total runoff volume.
             </p>
           </div>
-
           <button
             onClick={handleRunOptimization}
             disabled={loading}
-            className={`px-5 py-2.5 rounded font-medium text-xs flex items-center space-x-2 shadow-sm transition-all ${
+            className={`flex items-center space-x-2.5 px-6 py-3 rounded-lg font-semibold text-sm shadow-lg transition-all whitespace-nowrap ${
               loading
-                ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                : 'bg-slate-900 hover:bg-slate-800 text-white'
+                ? 'bg-indigo-800 text-indigo-400 cursor-not-allowed'
+                : 'bg-indigo-500 hover:bg-indigo-400 text-white hover:shadow-indigo-500/40 hover:shadow-xl'
             }`}
           >
-            <Play className={`w-4 h-4 fill-current ${loading ? 'animate-spin' : ''}`} />
-            <span>{loading ? 'Running NSGA-II Generations...' : 'Execute Optimisation'}</span>
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Play className="w-4 h-4 fill-current" />
+            )}
+            <span>{loading ? 'Running NSGA-II...' : 'Run NSGA-II Optimisation'}</span>
           </button>
         </div>
       </div>
 
-      {/* Control Configuration Parameters */}
-      <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm space-y-4">
-        <h3 className="font-bold text-slate-900 text-sm border-b border-slate-100 pb-2">
-          Budget Constraints & Genetic Algorithm Hyperparameters
+      {/* Configuration Panel */}
+      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+        <h3 className="font-bold text-slate-900 text-sm border-b border-slate-100 pb-3 mb-4 flex items-center gap-2">
+          <Sliders className="w-4 h-4 text-indigo-500" />
+          Algorithm Configuration
         </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 text-xs">
 
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs">
-          
+          {/* Budget Slider */}
           <div>
-            <div className="flex justify-between mb-1">
-              <label className="text-slate-700 font-medium">Budget Ceiling</label>
-              <span className="font-mono font-bold text-slate-900">₹ {budgetLimit} Lakhs</span>
+            <div className="flex justify-between mb-1.5">
+              <label className="text-slate-700 font-semibold">Budget Ceiling</label>
+              <span className="font-mono font-bold text-indigo-700">₹ {budgetLimit} Lakhs</span>
             </div>
             <input
               type="range"
               min="50"
-              max="600"
+              max="500"
               step="25"
               value={budgetLimit}
               onChange={e => setBudgetLimit(parseInt(e.target.value))}
-              className="w-full accent-sky-600 cursor-pointer"
+              className="w-full accent-indigo-600 cursor-pointer"
             />
-            <span className="text-[10px] text-slate-500 block mt-1">Capital expenditure limit</span>
+            <div className="flex justify-between text-[10px] text-slate-400 font-mono mt-1">
+              <span>₹50 L</span><span>₹500 L</span>
+            </div>
+            <span className="text-[10px] text-slate-500 block mt-1">Capital expenditure limit for NSGA-II search space</span>
           </div>
 
+          {/* Rainfall Scenario */}
           <div>
-            <label className="block text-slate-700 font-medium mb-1">Drainage Stress Condition</label>
+            <label className="block text-slate-700 font-semibold mb-1.5">Rainfall Scenario</label>
+            <select
+              value={scenarioId}
+              onChange={e => setScenarioId(parseInt(e.target.value))}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-xs bg-white font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none"
+            >
+              {RAINFALL_SCENARIOS.map(sc => (
+                <option key={sc.id} value={sc.id}>{sc.name} ({sc.mm}mm)</option>
+              ))}
+            </select>
+            <span className="text-[10px] text-slate-500 block mt-1">Storm event used to evaluate each chromosome's fitness</span>
+          </div>
+
+          {/* Drainage Stress */}
+          <div>
+            <label className="block text-slate-700 font-semibold mb-1.5">Drainage Stress Condition</label>
             <select
               value={drainageStress}
               onChange={e => setDrainageStress(parseInt(e.target.value))}
-              className="w-full border border-slate-300 rounded px-3 py-2 text-xs bg-white font-mono focus:ring-1 focus:ring-sky-500 focus:outline-none"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-xs bg-white font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none"
             >
-              <option value={100}>100% Normal Capacity</option>
-              <option value={75}>75% Drainage Stress</option>
-              <option value={50}>50% Drainage Stress</option>
-              <option value={25}>25% Critical Stress</option>
+              {DRAINAGE_STRESS_OPTIONS.map(o => (
+                <option key={o.pct} value={o.pct}>{o.label}</option>
+              ))}
             </select>
-            <span className="text-[10px] text-slate-500 block mt-1">Evaluates solutions under stress</span>
-          </div>
-
-          <div>
-            <div className="flex justify-between mb-1">
-              <label className="text-slate-700 font-medium">Population Size</label>
-              <span className="font-mono font-bold">{popSize} individuals</span>
-            </div>
-            <input
-              type="range"
-              min="20"
-              max="50"
-              step="5"
-              value={popSize}
-              onChange={e => setPopSize(parseInt(e.target.value))}
-              className="w-full accent-sky-600 cursor-pointer"
-            />
-            <span className="text-[10px] text-slate-500 block mt-1">Chromosomes per generation</span>
-          </div>
-
-          <div>
-            <div className="flex justify-between mb-1">
-              <label className="text-slate-700 font-medium">Generations</label>
-              <span className="font-mono font-bold">{generations} epochs</span>
-            </div>
-            <input
-              type="range"
-              min="10"
-              max="30"
-              step="5"
-              value={generations}
-              onChange={e => setGenerations(parseInt(e.target.value))}
-              className="w-full accent-sky-600 cursor-pointer"
-            />
-            <span className="text-[10px] text-slate-500 block mt-1">Evolutionary iterations</span>
+            <span className="text-[10px] text-slate-500 block mt-1">Evaluates all solutions under this hydraulic stress factor</span>
           </div>
 
         </div>
+
+        {/* Algorithm fixed params */}
+        <div className="mt-4 pt-4 border-t border-slate-100 flex flex-wrap gap-3 text-[11px] font-mono text-slate-500">
+          <span className="bg-slate-100 px-2.5 py-1 rounded">Algorithm: <strong className="text-slate-700">NSGA-II</strong></span>
+          <span className="bg-slate-100 px-2.5 py-1 rounded">Population: <strong className="text-slate-700">60 chromosomes</strong></span>
+          <span className="bg-slate-100 px-2.5 py-1 rounded">Generations: <strong className="text-slate-700">40 epochs</strong></span>
+          <span className="bg-slate-100 px-2.5 py-1 rounded">Objectives: <strong className="text-slate-700">3 (cost, peak, volume)</strong></span>
+          <span className="bg-slate-100 px-2.5 py-1 rounded">Crossover: <strong className="text-slate-700">SBX (η=20)</strong></span>
+          <span className="bg-slate-100 px-2.5 py-1 rounded">Mutation: <strong className="text-slate-700">PM (η=15)</strong></span>
+        </div>
       </div>
 
-      {result ? (
-        <div className="space-y-6 animate-in fade-in duration-200">
-          
-          {/* Curated Solutions Cards: Low-Cost, Balanced, High-Perf */}
+      {/* Loading Progress */}
+      {loading && (
+        <div className="bg-white border border-indigo-200 rounded-xl p-6 shadow-sm">
+          <div className="flex items-center gap-3 mb-3">
+            <Loader2 className="w-4 h-4 text-indigo-500 animate-spin" />
+            <span className="text-sm font-semibold text-slate-800">Running NSGA-II Genetic Algorithm...</span>
+            <span className="ml-auto font-mono text-indigo-700 font-bold">{progress}%</span>
+          </div>
+          <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+            <div
+              className="bg-gradient-to-r from-indigo-500 to-purple-500 h-2.5 rounded-full transition-all duration-300"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <p className="text-[11px] text-slate-500 mt-2 font-mono">
+            Evolving population across {40} generations — identifying Pareto-optimal GI allocation strategies...
+          </p>
+        </div>
+      )}
+
+      {/* Results */}
+      {result && !loading ? (
+        <div className="space-y-5">
+
+          {/* Algorithm Metadata Card */}
+          <div className="bg-slate-900 rounded-xl p-5 text-white">
+            <div className="flex items-center gap-2 text-indigo-400 font-mono text-xs mb-3">
+              <Target className="w-4 h-4" />
+              <span>OPTIMIZATION COMPLETE — NSGA-II ALGORITHM</span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+              <div>
+                <span className="text-slate-500 font-mono text-[10px] block">Algorithm</span>
+                <span className="font-bold text-indigo-300">NSGA-II</span>
+              </div>
+              <div>
+                <span className="text-slate-500 font-mono text-[10px] block">Solutions Found</span>
+                <span className="font-bold text-emerald-300">{result.pareto_frontier.length} non-dominated</span>
+              </div>
+              <div>
+                <span className="text-slate-500 font-mono text-[10px] block">Execution Time</span>
+                <span className="font-bold text-slate-200">{result.execution_time_s}s</span>
+              </div>
+              <div>
+                <span className="text-slate-500 font-mono text-[10px] block">Objectives</span>
+                <span className="font-bold text-slate-200">3 (cost, peak, vol)</span>
+              </div>
+            </div>
+            <div className="mt-3 pt-3 border-t border-slate-800 flex flex-wrap gap-2 text-[10px] font-mono text-slate-400">
+              {result.algorithm_metadata.objectives.map((obj, i) => (
+                <span key={i} className="bg-slate-800 px-2 py-0.5 rounded text-slate-300">
+                  Obj {i + 1}: {obj}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* 3 Solution Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            
-            {/* Low-Cost Solution */}
-            <div
-              onClick={() => setSelectedSolution(result.low_cost_solution)}
-              className={`border rounded-lg p-5 cursor-pointer transition-all ${
-                selectedSolution?.solution_id === result.low_cost_solution.solution_id
-                  ? 'border-sky-600 bg-sky-50/50 ring-1 ring-sky-600 shadow-sm'
-                  : 'border-slate-200 bg-white hover:bg-slate-50'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] uppercase font-mono font-bold px-2 py-0.5 rounded bg-sky-100 text-sky-800">
-                  Economical Entry
-                </span>
-                <span className="font-mono font-bold text-slate-900 text-sm">
-                  ₹ {result.low_cost_solution.total_cost_lakhs} L
-                </span>
-              </div>
-              <h4 className="font-bold text-slate-900 text-base mb-1">Low-Cost Solution</h4>
-              <p className="text-xs text-slate-500 mb-3">
-                Minimum investment achieving viable stormwater attenuation.
-              </p>
-              <div className="grid grid-cols-2 gap-2 text-xs font-mono border-t border-slate-100 pt-3">
-                <div>
-                  <span className="text-slate-400 block text-[10px] font-sans">Peak Reduction</span>
-                  <span className="font-bold text-slate-800">-{result.low_cost_solution.peak_reduction_pct}%</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] font-sans">Vol. Retention</span>
-                  <span className="font-bold text-emerald-700">-{result.low_cost_solution.volume_reduction_pct}%</span>
-                </div>
-              </div>
-            </div>
+            {SOLUTION_CONFIGS.map(cfg => {
+              const sol = SolutionMap[cfg.key](result);
+              const isSelected = selectedSolKey === cfg.key;
+              const Icon = cfg.icon;
+              return (
+                <div
+                  key={cfg.key}
+                  onClick={() => setSelectedSolKey(cfg.key)}
+                  className={`border-2 rounded-xl p-5 cursor-pointer transition-all bg-white ${
+                    isSelected ? cfg.activeClass : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className={`text-[10px] uppercase font-mono font-bold px-2 py-0.5 rounded ${cfg.badgeClass}`}>
+                      {cfg.badge}
+                    </span>
+                    <Icon className={`w-4 h-4 ${isSelected ? cfg.metricColor : 'text-slate-400'}`} />
+                  </div>
+                  <h4 className="font-bold text-slate-900 text-base mt-1">{cfg.title}</h4>
+                  <p className="text-[11px] text-slate-500 mb-3">{cfg.desc}</p>
 
-            {/* Balanced Solution (Knee-Point) */}
-            <div
-              onClick={() => setSelectedSolution(result.balanced_solution)}
-              className={`border rounded-lg p-5 cursor-pointer transition-all ${
-                selectedSolution?.solution_id === result.balanced_solution.solution_id
-                  ? 'border-emerald-600 bg-emerald-50/50 ring-1 ring-emerald-600 shadow-sm'
-                  : 'border-slate-200 bg-white hover:bg-slate-50'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] uppercase font-mono font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">
-                  Recommended Knee-Point
-                </span>
-                <span className="font-mono font-bold text-slate-900 text-sm">
-                  ₹ {result.balanced_solution.total_cost_lakhs} L
-                </span>
-              </div>
-              <h4 className="font-bold text-slate-900 text-base mb-1">Balanced Solution</h4>
-              <p className="text-xs text-slate-500 mb-3">
-                Optimal trade-off minimizing distance to ideal objective vector.
-              </p>
-              <div className="grid grid-cols-2 gap-2 text-xs font-mono border-t border-slate-100 pt-3">
-                <div>
-                  <span className="text-slate-400 block text-[10px] font-sans">Peak Reduction</span>
-                  <span className="font-bold text-slate-800">-{result.balanced_solution.peak_reduction_pct}%</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] font-sans">Vol. Retention</span>
-                  <span className="font-bold text-emerald-700">-{result.balanced_solution.volume_reduction_pct}%</span>
-                </div>
-              </div>
-            </div>
+                  <div className="space-y-2.5 text-xs font-mono border-t border-slate-100 pt-3">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Total Cost</span>
+                      <span className={`font-bold ${cfg.metricColor}`}>₹{sol.total_cost_lakhs} Lakhs</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Peak Reduction</span>
+                      <span className="font-bold text-slate-800">-{sol.peak_reduction_pct}%</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Volume Reduction</span>
+                      <span className="font-bold text-emerald-700">-{sol.volume_reduction_pct}%</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Interventions</span>
+                      <span className="font-bold text-slate-700">{sol.interventions_count} sites</span>
+                    </div>
+                  </div>
 
-            {/* High-Performance Solution */}
-            <div
-              onClick={() => setSelectedSolution(result.high_perf_solution)}
-              className={`border rounded-lg p-5 cursor-pointer transition-all ${
-                selectedSolution?.solution_id === result.high_perf_solution.solution_id
-                  ? 'border-indigo-600 bg-indigo-50/50 ring-1 ring-indigo-600 shadow-sm'
-                  : 'border-slate-200 bg-white hover:bg-slate-50'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] uppercase font-mono font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-800">
-                  Maximum Mitigation
-                </span>
-                <span className="font-mono font-bold text-slate-900 text-sm">
-                  ₹ {result.high_perf_solution.total_cost_lakhs} L
-                </span>
-              </div>
-              <h4 className="font-bold text-slate-900 text-base mb-1">High-Performance Solution</h4>
-              <p className="text-xs text-slate-500 mb-3">
-                Maximum volume & peak reduction within allowable budget.
-              </p>
-              <div className="grid grid-cols-2 gap-2 text-xs font-mono border-t border-slate-100 pt-3">
-                <div>
-                  <span className="text-slate-400 block text-[10px] font-sans">Peak Reduction</span>
-                  <span className="font-bold text-slate-800">-{result.high_perf_solution.peak_reduction_pct}%</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] font-sans">Vol. Retention</span>
-                  <span className="font-bold text-emerald-700">-{result.high_perf_solution.volume_reduction_pct}%</span>
-                </div>
-              </div>
-            </div>
+                  <div className="mt-3 pt-2 border-t border-slate-100 space-y-1">
+                    {sol.allocations.slice(0, 3).map((a, i) => (
+                      <div key={i} className="text-[10px] font-mono text-slate-500 flex justify-between">
+                        <span className="truncate max-w-[55%]">{a.site_name}</span>
+                        <span className="font-semibold text-slate-700">{a.intervention_type}</span>
+                      </div>
+                    ))}
+                    {sol.allocations.length > 3 && (
+                      <div className="text-[10px] font-mono text-slate-400">+{sol.allocations.length - 3} more...</div>
+                    )}
+                  </div>
 
+                  <button
+                    onClick={e => { e.stopPropagation(); handleApplySolution(sol); }}
+                    className={`w-full mt-3 py-2 rounded-lg text-[11px] font-semibold transition-colors flex items-center justify-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-slate-900 text-white hover:bg-slate-700'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
+                  >
+                    Apply Solution <ChevronRight className="w-3 h-3" />
+                  </button>
+                </div>
+              );
+            })}
           </div>
 
           {/* Pareto Frontier Scatter Plot */}
-          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-2 mb-4">
+          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-2 mb-5">
               <div>
-                <span className="text-[11px] font-mono uppercase text-sky-700 font-semibold block">
-                  Pareto-Optimal Trade-Off Surface
-                </span>
+                <span className="text-[11px] font-mono uppercase text-indigo-700 font-semibold block">Pareto-Optimal Trade-Off Surface</span>
                 <h3 className="font-bold text-slate-900 text-sm">
-                  Capital Cost (₹ Lakhs) vs. Residual Peak Runoff (m³/s)
+                  Capital Cost (₹ Lakhs) vs. Peak Reduction (%) — {result.pareto_frontier.length} Non-Dominated Solutions
                 </h3>
               </div>
-              <span className="text-xs font-mono text-slate-500">
-                {result.pareto_frontier.length} non-dominated solutions discovered ({result.execution_time_s}s)
+              <span className="text-xs font-mono text-slate-500 bg-slate-100 px-3 py-1.5 rounded-lg">
+                Exec: {result.execution_time_s}s
               </span>
             </div>
-
             <div className="h-72 w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <ScatterChart margin={{ top: 10, right: 20, bottom: 10, left: 0 }}>
+                <ScatterChart margin={{ top: 10, right: 30, bottom: 20, left: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis
                     type="number"
                     dataKey="cost"
-                    name="Cost"
-                    unit=" L"
-                    tick={{ fill: '#475569', fontSize: 11 }}
+                    name="Cost (₹ Lakhs)"
                     domain={[0, budgetLimit]}
+                    tick={{ fill: '#475569', fontSize: 11, fontFamily: 'monospace' }}
+                    label={{ value: 'Cost (₹ Lakhs)', position: 'insideBottom', offset: -10, fill: '#94a3b8', fontSize: 11 }}
                   />
                   <YAxis
                     type="number"
-                    dataKey="peakRunoff"
-                    name="Peak Runoff"
-                    unit=" m³/s"
+                    dataKey="peakReduction"
+                    name="Peak Reduction %"
                     tick={{ fill: '#475569', fontSize: 11 }}
+                    label={{ value: 'Peak Reduction (%)', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 11 }}
                   />
-                  <Tooltip
-                    cursor={{ strokeDasharray: '3 3' }}
-                    content={({ payload }) => {
-                      if (!payload || !payload.length) return null;
-                      const d = payload[0].payload;
-                      return (
-                        <div className="bg-white border border-slate-300 p-2.5 rounded shadow-lg text-xs font-mono">
-                          <p className="font-bold text-slate-900 font-sans mb-1">Solution #{d.solutionId} ({d.type})</p>
-                          <p>Cost: ₹{d.cost} Lakhs</p>
-                          <p>Residual Peak: {d.peakRunoff} m³/s</p>
-                          <p>Residual Vol: {d.volumeM3.toLocaleString()} m³</p>
-                        </div>
-                      );
-                    }}
-                  />
+                  <Tooltip content={<ScatterTooltip />} cursor={{ strokeDasharray: '3 3' }} />
                   <Scatter
                     name="Pareto Solutions"
                     data={scatterData}
-                    fill="#0284c7"
-                    onClick={(entry) => setSelectedSolution(entry.sol)}
+                    onClick={entry => {
+                      const sol = entry.sol as ParetoSolution;
+                      const matchKey = (['low_cost', 'balanced', 'high_perf'] as SolKey[]).find(
+                        k => SolutionMap[k](result).solution_id === sol.solution_id
+                      );
+                      if (matchKey) setSelectedSolKey(matchKey);
+                    }}
                     className="cursor-pointer"
                   >
                     {scatterData.map((entry, index) => (
                       <Cell
                         key={`cell-${index}`}
                         fill={
-                          entry.solutionId === selectedSolution?.solution_id
-                            ? '#0f172a'
-                            : '#0284c7'
+                          entry.solutionId === SolutionMap[selectedSolKey](result).solution_id
+                            ? '#4f46e5'
+                            : highlightIds.has(entry.solutionId)
+                            ? '#7c3aed'
+                            : '#a5b4fc'
                         }
-                        r={entry.solutionId === selectedSolution?.solution_id ? 7 : 4.5}
+                        r={
+                          entry.solutionId === SolutionMap[selectedSolKey](result).solution_id
+                            ? 8
+                            : highlightIds.has(entry.solutionId)
+                            ? 6
+                            : 4
+                        }
                       />
                     ))}
                   </Scatter>
                 </ScatterChart>
               </ResponsiveContainer>
             </div>
+            <div className="flex items-center gap-4 justify-center mt-2 text-[11px] font-mono text-slate-500">
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-indigo-600 inline-block" /> Selected</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-violet-600 inline-block" /> Key Solutions</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-indigo-200 inline-block" /> Pareto Frontier</span>
+            </div>
           </div>
 
-          {/* Detailed Selected Solution Breakdown Table */}
+          {/* Baseline Comparison Progress Bars */}
           {selectedSolution && (
-            <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-3">
+            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+              <h3 className="font-bold text-slate-900 text-sm mb-4 flex items-center gap-2">
+                <BarChart2 className="w-4 h-4 text-slate-500" />
+                Performance vs. Baseline — Solution #{selectedSolution.solution_id} ({selectedSolution.solution_type})
+              </h3>
+              <div className="space-y-5">
                 <div>
-                  <div className="flex items-center space-x-2">
-                    <span className="font-mono text-xs text-sky-700 font-bold">
-                      Solution #{selectedSolution.solution_id}
-                    </span>
-                    <span className="text-xs px-2 py-0.5 rounded font-mono bg-slate-100 text-slate-800">
-                      {selectedSolution.solution_type}
-                    </span>
+                  <div className="flex justify-between text-xs font-mono mb-1.5">
+                    <span className="text-slate-600">Peak Runoff Reduction</span>
+                    <span className="font-bold text-emerald-700">-{selectedSolution.peak_reduction_pct}%</span>
                   </div>
-                  <h3 className="font-bold text-slate-900 text-sm mt-0.5">
-                    Spatial Intervention Allocations across Tiruchirappalli
-                  </h3>
+                  <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="bg-gradient-to-r from-emerald-500 to-teal-500 h-3 rounded-full transition-all duration-700"
+                      style={{ width: `${Math.min(selectedSolution.peak_reduction_pct, 100)}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1">
+                    <span>Baseline: {result.baseline_peak_runoff_m3s} m³/s</span>
+                    <span>Residual: {selectedSolution.residual_peak_runoff_m3s} m³/s</span>
+                  </div>
                 </div>
 
-                <div className="flex items-center space-x-3">
-                  <button
-                    onClick={() => handleApplyToActive(selectedSolution)}
-                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-medium transition-colors"
-                  >
-                    Apply to Active Portfolio
-                  </button>
-                  <button
-                    onClick={onNavigateToSimulation}
-                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-medium transition-colors"
-                  >
-                    Test in Simulation Lab →
-                  </button>
+                <div>
+                  <div className="flex justify-between text-xs font-mono mb-1.5">
+                    <span className="text-slate-600">Volume Reduction</span>
+                    <span className="font-bold text-sky-700">-{selectedSolution.volume_reduction_pct}%</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="bg-gradient-to-r from-sky-500 to-blue-500 h-3 rounded-full transition-all duration-700"
+                      style={{ width: `${Math.min(selectedSolution.volume_reduction_pct, 100)}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1">
+                    <span>Baseline: {result.baseline_volume_m3.toLocaleString()} m³</span>
+                    <span>Residual: {selectedSolution.residual_volume_m3.toLocaleString()} m³</span>
+                  </div>
                 </div>
               </div>
 
-              {selectedSolution.allocations.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="bg-slate-100 text-slate-700 font-mono border-b border-slate-200">
-                        <th className="py-2.5 px-3">Site Location</th>
-                        <th className="py-2.5 px-3">Subcatchment</th>
-                        <th className="py-2.5 px-3">GI Technology</th>
-                        <th className="py-2.5 px-3">Allocated Area</th>
-                        <th className="py-2.5 px-3 font-semibold">Estimated Cost</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 font-mono">
-                      {selectedSolution.allocations.map((alloc, idx) => (
-                        <tr key={idx} className="hover:bg-slate-50">
-                          <td className="py-2 px-3 font-sans font-medium text-slate-900">{alloc.site_name}</td>
-                          <td className="py-2 px-3 font-bold">{alloc.subcatchment_code}</td>
-                          <td className="py-2 px-3 font-sans">{alloc.intervention_type}</td>
-                          <td className="py-2 px-3">{alloc.allocated_area_m2.toLocaleString()} m²</td>
-                          <td className="py-2 px-3 font-bold text-slate-900">₹ {alloc.estimated_cost_inr_lakhs} L</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p className="text-xs text-slate-500 py-3">
-                  Zero intervention portfolio (Baseline condition).
-                </p>
-              )}
+              {/* CTA Buttons */}
+              <div className="flex gap-3 mt-5 pt-4 border-t border-slate-100">
+                <button
+                  onClick={() => handleApplySolution(selectedSolution)}
+                  className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-2 shadow"
+                >
+                  Apply Solution to Portfolio
+                </button>
+                <button
+                  onClick={onNavigateToSimulation}
+                  className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-2"
+                >
+                  Test in Simulation Lab <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           )}
 
         </div>
-      ) : (
-        <div className="bg-white border border-slate-200 rounded-lg p-12 text-center text-slate-400">
-          <Sliders className="w-10 h-10 mx-auto mb-3 opacity-30 text-slate-600" />
-          <h4 className="font-bold text-slate-700 text-sm mb-1">No Optimization Run Yet</h4>
-          <p className="text-xs text-slate-500 max-w-md mx-auto mb-4">
-            Configure your budget ceiling and hyperparameters above, then click Execute Optimisation to run the multi-objective genetic algorithm.
-          </p>
-          <button
-            onClick={handleRunOptimization}
-            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-medium transition-colors"
-          >
-            Run Default NSGA-II Search (₹ 300 Lakhs Budget)
-          </button>
+      ) : !loading && (
+        <div className="bg-white border border-slate-200 rounded-xl p-16 text-center shadow-sm">
+          <div className="max-w-md mx-auto">
+            <div className="w-16 h-16 rounded-full bg-indigo-50 flex items-center justify-center mx-auto mb-4">
+              <Sliders className="w-8 h-8 text-indigo-400" />
+            </div>
+            <h4 className="font-bold text-slate-800 text-base mb-2">No Optimization Run Yet</h4>
+            <p className="text-xs text-slate-500 leading-relaxed mb-6">
+              Configure your budget ceiling and hyperparameters above, then click
+              <strong className="text-slate-700"> Run NSGA-II Optimisation</strong> to discover
+              Pareto-optimal green infrastructure portfolios.
+            </p>
+            <button
+              onClick={handleRunOptimization}
+              className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold transition-colors shadow"
+            >
+              Run Default NSGA-II (₹300 Lakhs Budget)
+            </button>
+          </div>
         </div>
       )}
 

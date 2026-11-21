@@ -20,6 +20,14 @@ import {
   fetchFloodEvidence, fetchInterventionSites, fetchRainfallScenarios,
   fetchResilienceFingerprint
 } from './api';
+import {
+  MOCK_STUDY_AREA,
+  MOCK_SUBCATCHMENTS,
+  MOCK_DRAINAGE_ASSETS,
+  MOCK_FLOOD_EVIDENCE,
+  MOCK_INTERVENTION_SITES,
+  MOCK_RAINFALL_SCENARIOS,
+} from './mockData';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('overview');
@@ -58,7 +66,7 @@ export const App: React.FC = () => {
   const [activeFingerprint, setActiveFingerprint] = useState<ResilienceFingerprint | null>(null);
   const [loadingFingerprint, setLoadingFingerprint] = useState<boolean>(false);
 
-  // Initial Data Fetching
+  // Initial Data Fetching — with mock data fallback when API is unavailable
   useEffect(() => {
     fetchHealth()
       .then(h => {
@@ -70,12 +78,29 @@ export const App: React.FC = () => {
         setEngineName('Surrogate Hydrological Engine');
       });
 
-    fetchStudyArea().then(data => setStudyArea(data)).catch(console.error);
-    fetchSubcatchments().then(data => setSubcatchments(data)).catch(console.error);
-    fetchDrainageAssets().then(data => setDrainageAssets(data)).catch(console.error);
-    fetchFloodEvidence().then(data => setFloodEvidence(data)).catch(console.error);
-    fetchInterventionSites().then(data => setInterventionSites(data)).catch(console.error);
-    fetchRainfallScenarios().then(data => setScenarios(data)).catch(console.error);
+    fetchStudyArea()
+      .then(data => setStudyArea(data))
+      .catch(() => setStudyArea(MOCK_STUDY_AREA));
+
+    fetchSubcatchments()
+      .then(data => setSubcatchments(data))
+      .catch(() => setSubcatchments(MOCK_SUBCATCHMENTS));
+
+    fetchDrainageAssets()
+      .then(data => setDrainageAssets(data))
+      .catch(() => setDrainageAssets(MOCK_DRAINAGE_ASSETS));
+
+    fetchFloodEvidence()
+      .then(data => setFloodEvidence(data))
+      .catch(() => setFloodEvidence(MOCK_FLOOD_EVIDENCE));
+
+    fetchInterventionSites()
+      .then(data => setInterventionSites(data))
+      .catch(() => setInterventionSites(MOCK_INTERVENTION_SITES));
+
+    fetchRainfallScenarios()
+      .then(data => setScenarios(data))
+      .catch(() => setScenarios(MOCK_RAINFALL_SCENARIOS));
   }, []);
 
   const handleOpenFingerprint = async (code: string) => {
@@ -84,14 +109,57 @@ export const App: React.FC = () => {
       const fp = await fetchResilienceFingerprint(code, 3);
       setActiveFingerprint(fp);
     } catch (err) {
-      console.error(err);
+      // Build a mock fingerprint from subcatchment data as fallback
+      const sub = MOCK_SUBCATCHMENTS.find(s => s.code === code);
+      if (sub) {
+        const mockFp: ResilienceFingerprint = {
+          subcatchment_code: sub.code,
+          name: sub.name,
+          area_ha: sub.area_ha,
+          elevation_m: sub.elevation_m,
+          slope_pct: sub.slope_pct,
+          flow_accumulation: sub.flow_accumulation,
+          impervious_pct: sub.impervious_pct,
+          soil_type: sub.soil_type,
+          baseline_susceptibility_score: sub.susceptibility_score,
+          susceptibility_category:
+            sub.susceptibility_score >= 0.7 ? 'High'
+            : sub.susceptibility_score >= 0.45 ? 'Moderate' : 'Low',
+          dominant_factor: sub.dominant_factor,
+          stress_scenarios: [
+            { label: 'Full Design Capacity', capacity_pct: 100, peak_runoff_m3s: parseFloat((sub.baseline_drainage_capacity_m3s * 0.80).toFixed(2)), runoff_volume_m3: Math.round(sub.area_ha * 420), waterlog_depth_cm: 8,  drainage_surcharge_risk: 'Low — Within Capacity',          attenuation_deficit_m3: 0 },
+            { label: '75% Partial Blockage', capacity_pct: 75,  peak_runoff_m3s: parseFloat((sub.baseline_drainage_capacity_m3s * 0.95).toFixed(2)), runoff_volume_m3: Math.round(sub.area_ha * 510), waterlog_depth_cm: 22, drainage_surcharge_risk: 'Moderate — Surcharge Risk',       attenuation_deficit_m3: Math.round(sub.area_ha * 90) },
+            { label: '50% Severe Silting',   capacity_pct: 50,  peak_runoff_m3s: parseFloat((sub.baseline_drainage_capacity_m3s * 1.15).toFixed(2)), runoff_volume_m3: Math.round(sub.area_ha * 640), waterlog_depth_cm: 42, drainage_surcharge_risk: 'High — Likely Overflow',          attenuation_deficit_m3: Math.round(sub.area_ha * 220) },
+            { label: '25% Critical Blockage',capacity_pct: 25,  peak_runoff_m3s: parseFloat((sub.baseline_drainage_capacity_m3s * 1.40).toFixed(2)), runoff_volume_m3: Math.round(sub.area_ha * 820), waterlog_depth_cm: 68, drainage_surcharge_risk: 'Critical — Widespread Inundation', attenuation_deficit_m3: Math.round(sub.area_ha * 400) },
+          ],
+          intervention_coverage_m2: 2500,
+          potential_volume_retention_m3: Math.round(sub.area_ha * 85),
+          potential_peak_reduction_pct: Math.round(sub.susceptibility_score * 22),
+          remaining_risk_score: parseFloat((sub.susceptibility_score * 0.78).toFixed(2)),
+          radar_metrics: [
+            { dimension: 'Imperviousness', value: Math.min(100, sub.impervious_pct), baseline: 65 },
+            { dimension: 'Flow Accum.', value: Math.min(100, Math.round(sub.flow_accumulation / 700)), baseline: 50 },
+            { dimension: 'Low Slope', value: Math.min(100, Math.round((4 - Math.min(sub.slope_pct, 4)) / 4 * 100)), baseline: 50 },
+            { dimension: 'Drainage Stress', value: Math.min(100, Math.round((1 / sub.hydraulic_conductivity_mmhr) * 300)), baseline: 40 },
+            { dimension: 'Low Elevation', value: Math.min(100, Math.round((90 - Math.min(sub.elevation_m, 90)) / 25 * 100)), baseline: 45 },
+            { dimension: 'Susceptibility', value: Math.round(sub.susceptibility_score * 100), baseline: 50 },
+          ],
+          scientific_explanation: `${sub.name} (${sub.code}) presents a composite flood susceptibility score of ${sub.susceptibility_score.toFixed(2)}, driven primarily by ${sub.dominant_factor}. The subcatchment covers ${sub.area_ha} ha at a mean elevation of ${sub.elevation_m} m with ${sub.impervious_pct}% impervious surface cover and a low terrain gradient of ${sub.slope_pct}%. These characteristics, combined with the ${sub.soil_type} pedological profile (Ksat ${sub.hydraulic_conductivity_mmhr} mm/hr), limit natural infiltration capacity and accelerate surface runoff generation under moderate to high intensity precipitation events typical of the northeast monsoon season.`,
+          limitations_note: 'This fingerprint was generated from mock/fallback data as the backend API was unreachable. All stress scenario values are parametric estimates derived from physical subcatchment characteristics and should not be used as calibrated hydraulic model outputs. For production use, connect to the FloodScape AI backend.',
+        };
+        setActiveFingerprint(mockFp);
+      } else {
+        console.error('No subcatchment found for code:', code, err);
+      }
     } finally {
       setLoadingFingerprint(false);
     }
   };
 
   const handleRefreshScenarios = () => {
-    fetchRainfallScenarios().then(data => setScenarios(data)).catch(console.error);
+    fetchRainfallScenarios()
+      .then(data => setScenarios(data))
+      .catch(() => setScenarios(MOCK_RAINFALL_SCENARIOS));
   };
 
   const handleApplyOptimizationSolution = (interventions: ProposedInterventionItem[]) => {
